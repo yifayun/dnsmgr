@@ -3,6 +3,7 @@
 namespace app\controller;
 
 use app\BaseController;
+use app\lib\TotpGuard;
 use Exception;
 use think\facade\Db;
 
@@ -38,7 +39,7 @@ class Auth extends BaseController
             $user = Db::name('user')->where('username', $username)->find();
             if ($user && password_verify($password, $user['password'])) {
                 if ($user['status'] == 0) return json(['code' => -1, 'msg' => '此用户已被封禁', 'vcode' => 1]);
-                if (isset($user['totp_open']) && $user['totp_open'] == 1 && !empty($user['totp_secret'])) {
+                if (TotpGuard::needScene($user, 'login')) {
                     session('pre_login_user', $user['id']);
                     if (file_exists($login_limit_file)) {
                         unlink($login_limit_file);
@@ -53,7 +54,7 @@ class Auth extends BaseController
             } else {
                 if ($user) {
                     Db::name('log')->insert(['uid' => $user['id'], 'action' => '登录失败', 'data' => 'IP:' . $this->clientip, 'addtime' => date("Y-m-d H:i:s")]);
-                    if (isset($user['totp_open']) && $user['totp_open'] == 1 && !empty($user['totp_secret'])) {
+                    if (TotpGuard::needScene($user, 'login')) {
                         return json(['code' => -1, 'msg' => '用户名或密码错误', 'vcode' => 1]);
                     }
                 }
@@ -94,6 +95,7 @@ class Auth extends BaseController
         }
         $this->loginUser($user);
         session('pre_login_user', null);
+        TotpGuard::markStepUp($user['id']);
         return json(['code' => 0]);
     }
 

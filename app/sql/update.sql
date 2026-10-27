@@ -213,3 +213,6 @@ CREATE TABLE IF NOT EXISTS `dnsmgr_domain_category` (
 ALTER TABLE `dnsmgr_domain`
 ADD COLUMN `cid` int(11) unsigned NOT NULL DEFAULT '0',
 ADD KEY `cid` (`cid`);
+
+ALTER TABLE `dnsmgr_user`
+ADD COLUMN `totp_scenes` varchar(255) DEFAULT NULL;

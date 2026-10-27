@@ -3,6 +3,7 @@
 namespace app\controller;
 
 use app\BaseController;
+use app\lib\TotpGuard;
 use Exception;
 use think\facade\Db;
 use think\facade\View;
@@ -158,7 +159,15 @@ class Index extends BaseController
             Db::name('user')->where('id', $this->request->user['id'])->update(['password' => password_hash($newpwd, PASSWORD_DEFAULT)]);
             return json(['code' => 0, 'msg' => 'succ']);
         }
-        View::assign('user', $this->request->user);
+        $user = $this->request->user;
+        $user['totp_scenes_list'] = TotpGuard::parseScenes($user);
+        if (empty($user['totp_scenes_list']) && !empty($user['totp_open'])) {
+            $user['totp_scenes_list'] = ['login'];
+        }
+        if (empty($user['totp_open'])) {
+            $user['totp_scenes_list'] = TotpGuard::ALL_SCENES;
+        }
+        View::assign('user', $user);
         return view();
     }
 
@@ -178,6 +187,7 @@ class Index extends BaseController
         } elseif ($action == 'bind') {
             $secret = input('post.secret');
             $code = input('post.code');
+            $scenes = input('post.scenes/a', []);
             if (empty($secret)) return json(['code' => -1, 'msg' => '密钥不能为空']);
             if (empty($code)) return json(['code' => -1, 'msg' => '请输入动态口令']);
             try {
@@ -188,12 +198,49 @@ class Index extends BaseController
             } catch (Exception $e) {
                 return json(['code' => -1, 'msg' => $e->getMessage()]);
             }
-            Db::name('user')->where('id', $this->request->user['id'])->update(['totp_open' => 1, 'totp_secret' => $secret]);
+            $scenes = TotpGuard::normalizeScenes($scenes);
+            Db::name('user')->where('id', $this->request->user['id'])->update([
+                'totp_open' => 1,
+                'totp_secret' => $secret,
+                'totp_scenes' => json_encode($scenes, JSON_UNESCAPED_UNICODE),
+            ]);
+            TotpGuard::markStepUp($this->request->user['id']);
             return json(['code' => 0, 'msg' => 'succ']);
         } elseif ($action == 'close') {
-            Db::name('user')->where('id', $this->request->user['id'])->update(['totp_open' => 0, 'totp_secret' => null]);
+            Db::name('user')->where('id', $this->request->user['id'])->update([
+                'totp_open' => 0,
+                'totp_secret' => null,
+                'totp_scenes' => null,
+            ]);
+            TotpGuard::clearStepUp($this->request->user['id']);
             return json(['code' => 0, 'msg' => 'succ']);
+        } elseif ($action == 'scenes') {
+            if (empty($this->request->user['totp_open'])) {
+                return json(['code' => -1, 'msg' => '请先开启TOTP二次验证']);
+            }
+            $scenes = TotpGuard::normalizeScenes(input('post.scenes/a', []));
+            Db::name('user')->where('id', $this->request->user['id'])->update([
+                'totp_scenes' => json_encode($scenes, JSON_UNESCAPED_UNICODE),
+            ]);
+            return json(['code' => 0, 'msg' => 'succ', 'data' => $scenes]);
+        } elseif ($action == 'verify') {
+            if (empty($this->request->user['totp_open']) || empty($this->request->user['totp_secret'])) {
+                return json(['code' => -1, 'msg' => '未开启TOTP二次验证']);
+            }
+            $code = input('post.code', null, 'trim');
+            if (empty($code)) return json(['code' => -1, 'msg' => '请输入动态口令']);
+            try {
+                $totp = \app\lib\TOTP::create($this->request->user['totp_secret']);
+                if (!$totp->verify($code)) {
+                    return json(['code' => -1, 'msg' => '动态口令错误']);
+                }
+            } catch (Exception $e) {
+                return json(['code' => -1, 'msg' => $e->getMessage()]);
+            }
+            TotpGuard::markStepUp($this->request->user['id']);
+            return json(['code' => 0, 'msg' => '验证成功']);
         }
+        return json(['code' => -3]);
     }
 
     public function test()

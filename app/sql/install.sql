@@ -57,6 +57,7 @@ CREATE TABLE `dnsmgr_user` (
   `lasttime` datetime DEFAULT NULL,
   `totp_open` tinyint(1) NOT NULL DEFAULT '0',
   `totp_secret` varchar(100) DEFAULT NULL,
+  `totp_scenes` varchar(255) DEFAULT NULL,
   `status` tinyint(1) NOT NULL DEFAULT '1',
   PRIMARY KEY (`id`),
   KEY `username` (`username`)

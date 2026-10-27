@@ -7,6 +7,7 @@ use think\facade\Db;
 use think\facade\View;
 use think\facade\Cache;
 use app\lib\DnsHelper;
+use app\lib\TotpGuard;
 use app\service\ExpireNoticeService;
 use app\utils\DnsQueryUtils;
 use Exception;
@@ -51,6 +52,7 @@ class Domain extends BaseController
                 $row['typename'] = $row['type'] ?: '未知';
                 $row['icon'] = '';
             }
+            unset($row['config']);
             $list[] = $row;
         }
 
@@ -63,15 +65,22 @@ class Domain extends BaseController
         $action = input('param.action');
 
         $account = null;
+        $secretsLocked = false;
         if ($action == 'edit') {
             $id = input('get.id/d');
             $account = Db::name('account')->where('id', $id)->find();
             if (empty($account)) return $this->alert('error', '域名账户不存在');
+            if (TotpGuard::needScene($this->request->user, 'view_secret') && !TotpGuard::isStepUpValid($this->request->user['id'])) {
+                $account['config'] = TotpGuard::maskConfig($account['config']);
+                $secretsLocked = true;
+            }
         }
 
         View::assign('info', $account);
         View::assign('typeList', DnsHelper::getList());
         View::assign('action', $action);
+        View::assign('secretsLocked', $secretsLocked ? 1 : 0);
+        View::assign('needViewSecret', TotpGuard::needScene($this->request->user, 'view_secret') ? 1 : 0);
         return View::fetch();
     }
 
@@ -121,6 +130,12 @@ class Domain extends BaseController
             if (Db::name('account')->where('type', $type)->where('name', $name)->where('id', '<>', $id)->find()) {
                 return json(['code' => -1, 'msg' => '域名账户已存在']);
             }
+            $newConfig = json_decode($config, true);
+            $oldConfig = json_decode($row['config'] ?: '{}', true);
+            if (!is_array($newConfig)) $newConfig = [];
+            if (!is_array($oldConfig)) $oldConfig = [];
+            $newConfig = TotpGuard::mergeMaskedConfig($newConfig, $oldConfig);
+            $config = json_encode($newConfig, JSON_UNESCAPED_UNICODE);
             Db::startTrans();
             Db::name('account')->where('id', $id)->update([
                 'type' => $type,
@@ -147,8 +162,23 @@ class Domain extends BaseController
             if ($dcount > 0) return json(['code' => -1, 'msg' => '该域名账户下存在域名，无法删除']);
             Db::name('account')->where('id', $id)->delete();
             return json(['code' => 0]);
+        } elseif ($action == 'secret') {
+            if ($resp = TotpGuard::requireScene($this->request->user, 'view_secret')) {
+                return $resp;
+            }
+            $id = input('post.id/d');
+            $row = Db::name('account')->where('id', $id)->find();
+            if (!$row) return json(['code' => -1, 'msg' => '域名账户不存在']);
+            $config = json_decode($row['config'] ?: '{}', true);
+            if (!is_array($config)) $config = [];
+            return json(['code' => 0, 'data' => ['config' => $config]]);
         }
         return json(['code' => -3]);
+    }
+
+    private function requireDnsWriteTotp()
+    {
+        return TotpGuard::requireScene($this->request->user, 'dns_write');
     }
 
 
@@ -593,6 +623,7 @@ class Domain extends BaseController
             return json(['code' => -1, 'msg' => '域名不存在']);
         }
         if (!checkPermission(0, $drow['name'])) return $this->alert('error', '无权限');
+        if ($resp = $this->requireDnsWriteTotp()) return $resp;
 
         $name = input('post.name', null, 'trim');
         $type = input('post.type', null, 'trim');
@@ -628,6 +659,7 @@ class Domain extends BaseController
             return json(['code' => -1, 'msg' => '域名不存在']);
         }
         if (!checkPermission(0, $drow['name'])) return $this->alert('error', '无权限');
+        if ($resp = $this->requireDnsWriteTotp()) return $resp;
 
         $recordid = input('post.recordid', null, 'trim');
         $name = input('post.name', null, 'trim');
@@ -680,6 +712,7 @@ class Domain extends BaseController
             return json(['code' => -1, 'msg' => '域名不存在']);
         }
         if (!checkPermission(0, $drow['name'])) return $this->alert('error', '无权限');
+        if ($resp = $this->requireDnsWriteTotp()) return $resp;
 
         $recordid = input('post.recordid', null, 'trim');
         $recordinfo = input('post.recordinfo', null, 'trim');
@@ -715,6 +748,7 @@ class Domain extends BaseController
             return json(['code' => -1, 'msg' => '域名不存在']);
         }
         if (!checkPermission(0, $drow['name'])) return $this->alert('error', '无权限');
+        if ($resp = $this->requireDnsWriteTotp()) return $resp;
 
         $recordid = input('post.recordid', null, 'trim');
         $status = input('post.status', null, 'trim');
@@ -752,6 +786,7 @@ class Domain extends BaseController
             return json(['code' => -1, 'msg' => '域名不存在']);
         }
         if (!checkPermission(0, $drow['name'])) return $this->alert('error', '无权限');
+        if ($resp = $this->requireDnsWriteTotp()) return $resp;
 
         $recordid = input('post.recordid', null, 'trim');
         $remark = input('post.remark', null, 'trim');
@@ -777,6 +812,7 @@ class Domain extends BaseController
             return json(['code' => -1, 'msg' => '域名不存在']);
         }
         if (!checkPermission(0, $drow['name'])) return $this->alert('error', '无权限');
+        if ($resp = $this->requireDnsWriteTotp()) return $resp;
 
         $action = input('post.action', null, 'trim');
         $recordinfo = input('post.recordinfo', null, 'trim');
@@ -851,6 +887,7 @@ class Domain extends BaseController
             return json(['code' => -1, 'msg' => '域名不存在']);
         }
         if (!checkPermission(0, $drow['name'])) return $this->alert('error', '无权限');
+        if ($resp = $this->requireDnsWriteTotp()) return $resp;
 
         $action = input('post.action', null, 'trim');
         $recordinfo = input('post.recordinfo', null, 'trim');
@@ -915,6 +952,7 @@ class Domain extends BaseController
         if (!checkPermission(0, $drow['name'])) return $this->alert('error', '无权限');
 
         if (request()->isAjax()) {
+            if ($resp = $this->requireDnsWriteTotp()) return $resp;
             $record = input('post.record', null, 'trim');
             $type = input('post.type', null, 'trim');
             $line = input('post.line', null, 'trim');
@@ -1029,6 +1067,7 @@ class Domain extends BaseController
             }
             $dnstype = Db::name('account')->where('id', $drow['aid'])->value('type');
             if (!checkPermission(0, $drow['name'])) return json(['code' => -1, 'msg' => '无权限']);
+            if ($resp = $this->requireDnsWriteTotp()) return $resp;
 
             $name = input('post.name', null, 'trim');
             $type = input('post.type', null, 'trim');

@@ -28,7 +28,6 @@
 <div class="panel panel-warning">
 <div class="panel-heading"><h3 class="panel-title">TOTP二次验证</h3></div>
 <div class="panel-body">
-  <form onsubmit="return saveAccount(this)" method="post" class="form" role="form">
 	<div class="form-group">
 		<div class="input-group">
 			{if $user.totp_open == 1}
@@ -41,10 +40,24 @@
 			{/if}
 		</div>
 	</div>
-  </form>
+	<div class="form-group">
+		<label>需要二次验证的场景：</label>
+		<div class="checkbox">
+			<label><input type="checkbox" class="totp-scene" value="login"> 登录</label>
+		</div>
+		<div class="checkbox">
+			<label><input type="checkbox" class="totp-scene" value="dns_write"> 新增 / 修改 / 删除 DNS 解析</label>
+		</div>
+		<div class="checkbox">
+			<label><input type="checkbox" class="totp-scene" value="view_secret"> 查看已添加账号密钥</label>
+		</div>
+		{if $user.totp_open == 1}
+		<button type="button" class="btn btn-primary btn-sm" onclick="save_scenes()">保存场景设置</button>
+		{/if}
+	</div>
 </div>
 <div class="panel-footer">
-<p><span class="glyphicon glyphicon-info-sign"></span> 开启后，登录时需使用支持TOTP的认证软件进行二次验证，提高账号安全性。开启前需确保服务器时间正确。</p>
+<p><span class="glyphicon glyphicon-info-sign"></span> 开启后可按场景要求输入动态口令。验证通过后约 10 分钟内同类操作无需重复验证。开启前需确保服务器时间正确。</p>
 <p>支持TOTP的认证软件：<a href="https://sj.qq.com/appdetail/com.tencent.authenticator" target="_blank" rel="noreferrer">腾讯身份验证器</a>、<a href="https://play.google.com/store/apps/details?id=com.google.android.apps.authenticator2" target="_blank" rel="noreferrer">谷歌身份验证器</a>、<a href="https://www.microsoft.com/zh-cn/security/mobile-authenticator-app" target="_blank" rel="noreferrer">微软身份验证器</a>、<a href="https://github.com/freeotp" target="_blank" rel="noreferrer">FreeOTP</a></p>
 </div>
 </div>
@@ -62,6 +75,12 @@
 				<div class="qr-image mt-4" id="qrcode"></div>
 				<p><a href="javascript:;" data-clipboard-text="" id="copy-btn">复制密钥</a></p>
 				<form id="form-totp" style="text-align: left;" onsubmit="return bind_totp()">
+					<div class="form-group">
+						<label>需要二次验证的场景：</label>
+						<div class="checkbox"><label><input type="checkbox" class="totp-scene-bind" value="login" checked> 登录</label></div>
+						<div class="checkbox"><label><input type="checkbox" class="totp-scene-bind" value="dns_write" checked> 新增 / 修改 / 删除 DNS 解析</label></div>
+						<div class="checkbox"><label><input type="checkbox" class="totp-scene-bind" value="view_secret" checked> 查看已添加账号密钥</label></div>
+					</div>
 					<div class="form-group mt-4">
 						<div class="input-group"><input type="number" class="form-control input-lg" name="code" id="code" value="" placeholder="填写动态口令" autocomplete="off" required><div class="input-group-btn"><input type="submit" name="submit" value="完成绑定" class="btn btn-success btn-lg btn-block"/></div></div>
 					</div>
@@ -77,6 +96,17 @@
 <script src="/static/js/clipboard-1.7.1.min.js"></script>
 <script>
 var commonData = {secret:null,qrcode:null};
+var totpOpen = {:$user.totp_open|default=0};
+var totpScenes = {$user.totp_scenes_list|json_encode|raw} || [];
+
+function getSelectedScenes(selector){
+	var scenes = [];
+	$(selector + ':checked').each(function(){
+		scenes.push($(this).val());
+	});
+	return scenes;
+}
+
 function saveAccount(obj){
 	var ii = layer.load(2, {shade:[0.1,'#fff']});
 	$.ajax({
@@ -112,7 +142,7 @@ function open_totp(){
 			if(res.code == 0){
 				commonData.secret = res.data.secret;
 				commonData.qrcode = res.data.qrcode;
-				$('#qrcode').qrcode({
+				$('#qrcode').empty().qrcode({
 					text: commonData.qrcode,
 					width: 150,
 					height: 150,
@@ -138,18 +168,63 @@ function bind_totp(){
 		layer.msg('动态口令格式错误', {icon: 2});
 		return false;
 	}
+	var scenes = getSelectedScenes('.totp-scene-bind');
+	if(scenes.length == 0){
+		layer.msg('请至少选择一个二次验证场景', {icon: 2});
+		return false;
+	}
 	var ii = layer.load(2, {shade:[0.1,'#fff']});
-	$.post('/totp/bind', {secret:commonData.secret, code:code}, function(res){
-		layer.close(ii);
-		if(res.code == 0){
-			layer.alert('TOTP绑定成功', {icon: 1}, function(){
-				window.location.reload();
-			});
-		}else{
-			layer.alert(res.msg, {icon: 2});
+	$.ajax({
+		type: 'POST',
+		url: '/totp/bind',
+		data: {secret:commonData.secret, code:code, scenes: scenes},
+		dataType: 'json',
+		success: function(res){
+			layer.close(ii);
+			if(res.code == 0){
+				layer.alert('TOTP绑定成功', {icon: 1}, function(){
+					window.location.reload();
+				});
+			}else{
+				layer.alert(res.msg, {icon: 2});
+			}
+		},
+		error: function(){
+			layer.close(ii);
+			layer.msg('服务器错误');
 		}
 	});
 	return false;
+}
+function save_scenes(){
+	if(!totpOpen){
+		layer.msg('请先开启TOTP二次验证', {icon: 2});
+		return;
+	}
+	var scenes = getSelectedScenes('.totp-scene');
+	if(scenes.length == 0){
+		layer.msg('请至少选择一个二次验证场景', {icon: 2});
+		return;
+	}
+	var ii = layer.load(2, {shade:[0.1,'#fff']});
+	$.ajax({
+		type: 'POST',
+		url: '/totp/scenes',
+		data: {scenes: scenes},
+		dataType: 'json',
+		success: function(res){
+			layer.close(ii);
+			if(res.code == 0){
+				layer.msg('场景设置已保存', {icon: 1});
+			}else{
+				layer.alert(res.msg, {icon: 2});
+			}
+		},
+		error: function(){
+			layer.close(ii);
+			layer.msg('服务器错误');
+		}
+	});
 }
 function close_totp(){
 	layer.confirm('确定要关闭TOTP二次验证吗？', {
@@ -169,6 +244,14 @@ function close_totp(){
 	});
 }
 $(document).ready(function(){
+	$('.totp-scene').each(function(){
+		if(totpScenes.indexOf($(this).val()) >= 0){
+			$(this).prop('checked', true);
+		}
+	});
+	$('.totp-scene-bind').each(function(){
+		$(this).prop('checked', true);
+	});
 	var clipboard = new Clipboard('#copy-btn');
 	clipboard.on('success', function (e) {
 		layer.msg('复制成功！', {icon: 1, time: 600});
